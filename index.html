@@ -1,46 +1,143 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="es">
 <head>
-  <meta charset="utf-8">
+  <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#16324f">
-  <meta name="description" content="Control administrativo de pendientes, caja chica, taxis, inventario perecedero y actividades recurrentes.">
-  <link rel="manifest" href="manifest.webmanifest">
-  <link rel="icon" href="icon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="styles.css">
-  <title>Control Administrativo</title>
+  <meta name="theme-color" content="#0e6390">
+  <meta name="description" content="Inventario de medicamentos en casa: escanea el código de barras, guarda nombre, uso, caducidad y stock, y recibe alertas antes de que caduquen.">
+  <title>Inventario de Medicamentos</title>
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="icon" href="./icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="./icon-512.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Medicamentos">
+  <link rel="stylesheet" href="./styles.css">
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js" defer></script>
 </head>
 <body>
-  <header class="topbar">
-    <div class="brand"><div class="logo">CA</div><div><strong>Control Administrativo</strong><small>Seguimiento laboral</small></div></div>
-    <button id="exportBtn" class="button ghost">Exportar datos</button>
+  <header class="app-header">
+    <div>
+      <h1>Inventario de Medicamentos</h1>
+      <p class="subtitle">Mi botiquín en casa · La Paz, BCS</p>
+    </div>
+    <button id="notifyBtn" class="btn btn-ghost" type="button">Activar avisos</button>
   </header>
+
   <main>
-    <section class="welcome">
-      <div><p class="eyebrow">PANEL DE CONTROL</p><h1>Hola, vamos a organizar tu día.</h1><p class="muted">Registra actividades, controla comprobaciones y da seguimiento a solicitudes.</p></div>
-      <div class="today" id="todayLabel"></div>
+    <p id="alertBanner" class="alert-banner" hidden></p>
+
+    <!-- Panel de alertas: cada tarjeta filtra la lista -->
+    <section class="alert-panel" aria-label="Alertas">
+      <button class="alert-card alert-amber" type="button" data-filter="soon" id="cardSoon">
+        <span class="alert-label">Por vencer este mes</span>
+        <span class="alert-count" id="countSoon">0</span>
+        <span class="alert-sub">vence en 30 días o menos</span>
+      </button>
+      <button class="alert-card alert-amber" type="button" data-filter="low" id="cardLow">
+        <span class="alert-label">Stock bajo</span>
+        <span class="alert-count" id="countLow">0</span>
+        <span class="alert-sub">2 unidades o menos</span>
+      </button>
+      <button class="alert-card alert-red" type="button" data-filter="expired" id="cardExpired">
+        <span class="alert-label">Vencidos</span>
+        <span class="alert-count" id="countExpired">0</span>
+        <span class="alert-sub">ya pasó su caducidad</span>
+      </button>
     </section>
-    <section class="stats" id="stats"></section>
-    <nav class="tabs" aria-label="Módulos">
-      <button class="tab active" data-view="dashboard">Resumen</button>
-      <button class="tab" data-view="tasks">Pendientes</button>
-      <button class="tab" data-view="followups">Seguimientos</button>
-      <button class="tab" data-view="cash">Caja chica</button>
-      <button class="tab" data-view="arqueos">Arqueos</button>
-      <button class="tab" data-view="taxis">Taxis</button>
-      <button class="tab" data-view="perishables">Inventario perecedero</button>
-      <button class="tab" data-view="recurring">Actividades fijas</button>
-    </nav>
-    <section id="view"></section>
-    <p class="notice"><strong>Versión inicial:</strong> los datos se guardan en este navegador y dispositivo. Antes de usar información laboral real desde varios dispositivos, hay que conectar una base de datos con inicio de sesión y sincronización.</p>
+
+    <section class="toolbar">
+      <input id="searchInput" type="search" placeholder="Buscar medicamento…" aria-label="Buscar medicamento" autocomplete="off">
+      <div class="filters" role="group" aria-label="Filtros">
+        <button class="chip active" type="button" data-filter="all">Todos</button>
+        <button class="chip" type="button" data-filter="soon">Por vencer</button>
+        <button class="chip" type="button" data-filter="low">Stock bajo</button>
+        <button class="chip" type="button" data-filter="expired">Vencidos</button>
+      </div>
+    </section>
+
+    <button id="scanBtn" class="btn btn-primary btn-scan" type="button">Escanear código de barras</button>
+
+    <!-- Escáner -->
+    <section id="scannerSection" class="card" hidden>
+      <h2>Escanear código</h2>
+      <p class="hint">Apunta la cámara al código de barras de la caja. Funciona con conexión a internet (la librería de escaneo se carga desde un CDN).</p>
+      <div id="reader"></div>
+      <p id="scannerError" class="error" hidden></p>
+      <div class="manual-row">
+        <label for="manualCode">O escribe el código a mano</label>
+        <div class="inline-form">
+          <input id="manualCode" type="text" inputmode="numeric" placeholder="Ej. 7501031311309" autocomplete="off">
+          <button id="manualBtn" class="btn btn-secondary" type="button">Buscar código</button>
+        </div>
+      </div>
+      <button id="closeScannerBtn" class="btn btn-ghost" type="button">Cerrar escáner</button>
+    </section>
+
+    <!-- Formulario de registro / edición -->
+    <section id="formSection" class="card">
+      <h2 id="formTitle">Registrar medicamento</h2>
+      <p id="nameOrigin" class="origin" hidden></p>
+      <form id="medForm">
+        <input id="editingId" type="hidden" value="">
+        <div class="field">
+          <label for="barcodeInput">Código de barras</label>
+          <input id="barcodeInput" type="text" inputmode="numeric" placeholder="Escanea o escríbelo" autocomplete="off">
+        </div>
+        <div class="field">
+          <label for="nameInput">Nombre *</label>
+          <input id="nameInput" type="text" placeholder="Ej. Paracetamol 500 mg" required autocomplete="off">
+        </div>
+        <div class="field">
+          <label for="brandInput">Marca / presentación</label>
+          <input id="brandInput" type="text" placeholder="Ej. Caja con 20 tabletas" autocomplete="off">
+        </div>
+        <div class="field">
+          <label for="useInput">Uso *</label>
+          <input id="useInput" type="text" placeholder="Ej. Dolor de cabeza / fiebre" required autocomplete="off">
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label for="expiryInput">Fecha de caducidad *</label>
+            <input id="expiryInput" type="date" required>
+          </div>
+          <div class="field">
+            <label for="stockInput">Stock en casa *</label>
+            <input id="stockInput" type="number" min="0" step="1" value="1" required>
+          </div>
+        </div>
+        <p class="hint">La fecha de caducidad y el uso se leen de la caja: no vienen en el código de barras. El nombre se busca solo al escanear; si no se encuentra, escríbelo una vez y la app lo recordará para ese código.</p>
+        <div class="form-actions">
+          <button class="btn btn-primary" type="submit" id="saveBtn">Guardar medicamento</button>
+          <button class="btn btn-ghost" type="button" id="cancelEditBtn" hidden>Cancelar edición</button>
+        </div>
+      </form>
+    </section>
+
+    <!-- Lista -->
+    <section aria-label="Lista de medicamentos">
+      <h2 class="list-title">Mis medicamentos <span id="listCount"></span></h2>
+      <ul id="medicineList" class="medicine-list"></ul>
+      <p id="emptyState" class="empty-state">Tu botiquín está vacío.<br>Toca “Escanear código de barras” para registrar tu primer medicamento.</p>
+    </section>
+
+    <section class="card backup-card">
+      <h2>Respaldo</h2>
+      <p class="hint">Tus datos viven solo en este teléfono/navegador. Haz un respaldo de vez en cuando.</p>
+      <div class="form-actions">
+        <button id="exportBtn" class="btn btn-secondary" type="button">Exportar respaldo (JSON)</button>
+        <button id="importBtn" class="btn btn-secondary" type="button">Importar respaldo</button>
+        <input id="importFile" type="file" accept="application/json,.json" hidden>
+      </div>
+    </section>
+
+    <footer>
+      <p>Los avisos aparecen al abrir la app. Sin servicio de notificaciones push, no llegan con la app cerrada.</p>
+    </footer>
   </main>
-  <dialog id="itemDialog">
-    <form id="itemForm" method="dialog">
-      <div class="dialog-head"><h2 id="dialogTitle">Nuevo registro</h2><button type="button" class="close" id="closeDialog" aria-label="Cerrar">×</button></div>
-      <div id="formFields" class="form-fields"></div>
-      <div class="dialog-actions"><button type="button" class="button ghost" id="cancelDialog">Cancelar</button><button type="submit" class="button primary">Guardar registro</button></div>
-    </form>
-  </dialog>
-  <script src="app.js"></script>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+  <script src="./app.js"></script>
 </body>
 </html>

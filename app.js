@@ -1,85 +1,486 @@
-const BRANCHES = [
-  "0127 · La Paz Selecto Colima",
-  "0331 · 16 de Septiembre",
-  "0333 · La Paz Madero",
-  "0334 · La Paz",
-  "0336 · Márquez de León",
-  "1060 · La Paz Centenario"
-];
-const STORE_KEY = "controlAdminPwa.v2";
-const today = () => { const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; };
-const nowLocal = () => { const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}T${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`; };
-const uid = () => Date.now().toString(36)+Math.random().toString(36).slice(2,8);
-const initial = {tasks:[],cash:[],taxis:[],recurring:[],generated:[],perishables:[],arqueos:[],customBranches:[],lastReminderDate:"",dailyEmail:""};
-let data = loadData(), currentView="dashboard", searchTerm="", dialogType="";
-function loadData(){try{return {...initial,...JSON.parse(localStorage.getItem(STORE_KEY)||localStorage.getItem("controlAdminPwa.v1")||"{}")}}catch{return {...initial}}}
-function save(){localStorage.setItem(STORE_KEY,JSON.stringify(data));render()}
-function allBranches(){return [...new Set([...BRANCHES,...(data.customBranches||[])])];}
-function esc(s=""){return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
-function money(n){return Number(n||0).toLocaleString("es-MX",{style:"currency",currency:"MXN"})}
-function dateLabel(s){if(!s)return "Sin fecha";let d=new Date(s.length===10?s+"T12:00:00":s);return Number.isNaN(d.getTime())?"Sin fecha":d.toLocaleDateString("es-MX",{day:"2-digit",month:"short",year:"numeric"})}
-function dateTimeLabel(s){if(!s)return "Sin fecha y hora";const d=new Date(s);return Number.isNaN(d.getTime())?dateLabel(s):d.toLocaleString("es-MX",{day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit"})}
-function branchesOf(x){return Array.isArray(x.branches)&&x.branches.length?x.branches:(x.branch?[x.branch]:[])}
-function branchText(x){return branchesOf(x).join(", ")||"Sin sucursal"}
-function branchOptions(value=""){return allBranches().map(b=>`<option value="${esc(b)}" ${b===value?"selected":""}>${esc(b)}</option>`).join("")}
-function branchChecks(selected=[]){return `<div class="branch-checks">${allBranches().map((b,i)=>`<label class="check-option"><input type="checkbox" name="branches" value="${esc(b)}" ${selected.includes(b)?"checked":""}><span>${esc(b)}</span></label>`).join("")}<div class="add-branch-row"><input id="newBranchInput" placeholder="Agregar sucursal al catálogo"><button type="button" class="mini" id="addBranchBtn">Agregar</button></div></div>`}
-const ADVANCED_STATUSES=["Pendiente presupuesto","Registrado","Pagado","Concluido"];
-function normalizeStatus(x,type){if(type==="cash"&&x.status==="Enviado por correo")return "Registrado";if(ADVANCED_STATUSES.includes(x.status))return x.status;if(x.status==="Concluido")return "Concluido";if(type==="cash")return "Pendiente presupuesto";return "Registrado"}
-function statusPill(status){let c=status==="Pendiente presupuesto"?"status-red":status==="Registrado"?"status-yellow":status==="Pagado"?"status-green":status==="Concluido"?"status-blue":["Atrasado","Vencido"].includes(status)?"status-red":"status-blue";return `<span class="pill ${c}">${esc(status||"Registrado")}</span>`}
-function statusSelect(value="Registrado",name="status"){return `<select class="status-select" data-status-select="${name}">${ADVANCED_STATUSES.map(s=>`<option ${s===value?"selected":""}>${s}</option>`).join("")}</select>`}
-function dueInfo(date){if(!date)return null;const due=new Date(date.slice(0,10)+"T00:00:00");if(Number.isNaN(due.getTime()))return null;const now=new Date();now.setHours(0,0,0,0);const days=Math.round((due-now)/86400000);if(days===0)return {days, label:"Vence hoy",cls:"due-today"};if(days===1)return {days,label:"Vence mañana",cls:"due-soon"};if(days>1)return {days,label:`Vence en ${days} días`,cls:days<=3?"due-soon":"due-normal"};const late=Math.abs(days);return {days,label:`Vencido hace ${late} ${late===1?"día":"días"}`,cls:late>3?"due-critical":"due-overdue"}}
-function dueBadge(date){const d=dueInfo(date);return d?`<span class="due-badge ${d.cls}">${d.label}</span>`:""}
-function dueSort(a,b){const ad=a.due||a.date||a.deliveredAt||"9999",bd=b.due||b.date||b.deliveredAt||"9999";const ap=dueInfo(ad),bp=dueInfo(bd);const ar=ap&&ap.days<0?0:1,br=bp&&bp.days<0?0:1;return ar-br||ad.localeCompare(bd)}
-function isCashLate(x){if(x.status!=="Pendiente de envío")return false;const stamp=x.deliveredAt||x.date;if(!stamp)return false;const d=new Date(stamp.length===10?stamp+"T00:00:00":stamp);return Date.now()-d.getTime()>24*60*60*1000}
-function effectiveCashStatus(x){return isCashLate(x)?"Atrasado":x.status}
-function openItems(){return [...data.tasks.filter(x=>normalizeStatus(x,"tasks")!=="Concluido").map(x=>({...x,_type:"tasks",_label:"Pendiente laboral"})),...data.cash.filter(x=>normalizeStatus(x,"cash")!=="Concluido"&&normalizeStatus(x,"cash")!=="Pagado").map(x=>({...x,_type:"cash",_label:"Caja chica",title:`Caja chica · ${x.concept}`})),...data.generated.filter(x=>x.status!=="Concluido").map(x=>({...x,_type:"generated",_label:"Actividad fija"})),...data.perishables.filter(x=>x.status!=="Concluido").map(x=>({...x,_type:"perishables",_label:"Inventario perecedero"})),...data.arqueos.filter(x=>x.status!=="Concluido").map(x=>({...x,_type:"arqueos",_label:"Arqueo"}))]}
-function renderStats(){const open= openItems();const pending=open.length;const overdue=open.filter(x=>{const d=dueInfo(x.due||x.date);return d&&d.days<0}).length;const soon=open.filter(x=>{const d=dueInfo(x.due||x.date);return d&&d.days>=0&&d.days<=3}).length;const cashOpen=data.cash.filter(x=>!["Pagado","Concluido"].includes(normalizeStatus(x,"cash")));const cashSum=cashOpen.reduce((a,x)=>a+Number(x.amount||0),0);const taxiMonth=today().slice(0,7);const taxiRecords=data.taxis.filter(x=>x.month===taxiMonth);const taxiSum=taxiRecords.reduce((a,x)=>a+Number(x.amount||0),0);const perish=data.perishables.filter(x=>x.status!=="Concluido");document.querySelector("#stats").innerHTML=[ ["Seguimientos",pending,`${overdue} vencidos · ${soon} próximos`,"followups"],["Caja chica",money(cashSum),`${cashOpen.length} comprobaciones pendientes`,"cash"],["Taxis del mes",money(taxiSum),`${taxiRecords.length} servicios registrados`,"taxis"],["Inventario perecedero",perish.filter(x=>x.date>=today()).length,`${perish.length} conteos pendientes`,"perishables"]].map(x=>`<button class="stat" data-goto="${x[3]}"><span>${x[0]}</span><strong>${x[1]}</strong><small>${x[2]}</small></button>`).join("")}
-function section(title,desc,button,label){return `<div class="section-head"><div><h2>${title}</h2><p>${desc}</p></div>${button?`<button class="button primary" data-add="${button}">+ ${label}</button>`:""}</div>`}
-function recordCard(x,type){let meta="",side="",actions="",dueDate=x.due||((type==="perishables"||type==="arqueos"||type==="generated")?x.date:null);const status=normalizeStatus(x,type);const due=dueBadge(dueDate);
- if(type==="tasks"){meta=`<p>${esc(branchText(x))} · Fecha límite: ${dateLabel(x.due)} ${due}</p><p>${esc(x.priority||"Prioridad normal")}${x.notes?" · "+esc(x.notes):""}</p>`;side=`${statusPill(status)}${statusSelect(status,`tasks:${x.id}`)}`;actions=`<button class="mini" data-duplicate="${type}:${x.id}">Duplicar</button><button class="mini" data-status="${type}:${x.id}">${status==="Concluido"?"Reabrir":"Marcar concluido"}</button>`}
- if(type==="cash"){const st=isCashLate(x)&&!["Pagado","Concluido"].includes(status)?"Vencido":status;meta=`<p>${esc(x.branch)} · Entrega: ${dateTimeLabel(x.deliveredAt||x.date)}</p><p>${esc(x.concept)}${x.notes?" · "+esc(x.notes):""}</p>${x.sentAt?`<p>Enviado: ${dateTimeLabel(x.sentAt)}</p>`:""}`;side=`<span class="amount">${money(x.amount)}</span>${statusPill(st)}${statusSelect(status,`cash:${x.id}`)}`;actions=`<button class="mini" data-duplicate="${type}:${x.id}">Duplicar</button>`}
- if(type==="taxis"){meta=`<p>${esc(x.branch)} · Periodo: ${esc(x.month)}</p><p>Importe registrado para el mes seleccionado.</p>`;side=`<span class="amount">${money(x.amount)}</span>${statusPill(status)}${statusSelect(status,`taxis:${x.id}`)}`;actions=`<button class="mini" data-duplicate="${type}:${x.id}">Duplicar</button>`}
- if(type==="recurring"){meta=`<p>${esc(branchText(x))} · Día límite: ${esc(x.day||"Sin definir")} de cada mes</p><p>${esc(x.notes||"Actividad recurrente")}</p>`;side=`<span class="pill status-blue">Actividad fija</span>`;actions=`<button class="mini" data-duplicate="${type}:${x.id}">Duplicar</button>`}
- if(type==="generated"){meta=`<p>${esc(branchText(x))} · Periodo: ${esc(x.period||"Sin periodo")} · Vence: ${dateLabel(x.due)} ${dueBadge(x.due)}</p>`;side=`${statusPill(status)}${statusSelect(status,`generated:${x.id}`)}`;actions=`<button class="mini" data-status="generated:${x.id}">${status==="Concluido"?"Reabrir":"Marcar concluido"}</button>`}
- if(type==="arqueos"){meta=`<p>${esc(branchText(x))} · Fecha programada: ${dateLabel(x.date)} ${dueBadge(x.date)}</p><p>${esc(x.notes||"Arqueo mensual")}</p>`;side=statusPill(status);actions=`<button class="mini" data-status="arqueos:${x.id}">${status==="Concluido"?"Reabrir":"Marcar concluido"}</button>`}
- if(type==="perishables"){meta=`<p>${esc(branchText(x))} · Fecha programada: ${dateLabel(x.date)} ${dueBadge(x.date)}</p><p>${esc(x.notes||"Conteo de inventario perecedero")}</p>`;side=statusPill(status);actions=`<button class="mini" data-status="perishables:${x.id}">${status==="Concluido"?"Reabrir":"Marcar concluido"}</button>`}
- return `<article class="record ${dueInfo(dueDate)&&dueInfo(dueDate).days<0?dueInfo(dueDate).cls:""}"><div style="flex:1;min-width:0"><h3>${esc(x.title||x.concept||"Registro")}</h3>${meta}</div><div class="record-side">${side}<div class="record-actions">${actions}<button class="mini" data-delete="${type}:${x.id}">Eliminar</button></div></div></article>`}
-function list(items,type){let filtered=items.filter(x=>JSON.stringify(x).toLowerCase().includes(searchTerm.toLowerCase())).sort(dueSort);return filtered.length?`<div class="record-list">${filtered.map(x=>recordCard(x,type)).join("")}</div>`:`<div class="empty"><b>No hay registros todavía</b>${type==="taxis"?"Las sucursales aparecerán aquí cuando registres un importe.":"Agrega uno con el botón de arriba para comenzar."}</div>`}
-function monthCalendar(){const month=(document.querySelector("#calendarMonth")||{}).value||today().slice(0,7);const [y,m]=month.split("-").map(Number);const first=new Date(y,m-1,1),last=new Date(y,m,0).getDate();let cells="";const offset=(first.getDay()+6)%7;for(let i=0;i<offset;i++)cells+='<div class="calendar-cell blank"></div>';for(let d=1;d<=last;d++){const key=`${y}-${String(m).padStart(2,"0")}-${String(d).padStart(2,"0")}`;const events=data.perishables.filter(x=>x.date===key);cells+=`<div class="calendar-cell ${key===today()?"today-cell":""}"><b>${d}</b>${events.map(e=>`<span class="calendar-event" title="${esc(branchText(e))}">${esc(e.title||"Conteo")}</span>`).join("")}</div>`}return `<div class="calendar-wrap"><div class="calendar-grid calendar-days">${["Lun","Mar","Mié","Jue","Vie","Sáb","Dom"].map(d=>`<div>${d}</div>`).join("")}</div><div class="calendar-grid">${cells}</div></div>`}
-function render(){document.querySelectorAll(".tab").forEach(b=>b.classList.toggle("active",b.dataset.view===currentView));document.querySelector("#todayLabel").textContent=new Date().toLocaleDateString("es-MX",{weekday:"long",day:"numeric",month:"long",year:"numeric"});renderStats();const v=document.querySelector("#view");
- if(currentView==="dashboard"){const allOpen=openItems();const overdueItems=allOpen.filter(x=>{const d=dueInfo(x.due||x.date);return d&&d.days<0});const budgetItems=allOpen.filter(x=>normalizeStatus(x,x._type)==="Pendiente presupuesto");const cashPend=data.cash.filter(x=>!["Pagado","Concluido"].includes(normalizeStatus(x,"cash")));const perishSoon=data.perishables.filter(x=>x.status!=="Concluido"&&x.date>=today()&&x.date<=new Date(Date.now()+7*86400000).toISOString().slice(0,10));const weekEnd=new Date();weekEnd.setDate(weekEnd.getDate()+7);const weekTasks=allOpen.filter(x=>{const d=x.due||x.date;return d&&d>=today()&&d<=weekEnd.toISOString().slice(0,10)});const attention=[...allOpen].sort(dueSort).slice(0,7);v.innerHTML=`<div class="alert-center"><div class="section-head"><div><h2>Centro de alertas</h2><p>Prioridades que requieren atención.</p></div></div><div class="alert-grid"><button class="alert-card alert-red" data-goto="followups"><b>${overdueItems.length}</b><span>Pendientes vencidos</span></button><button class="alert-card alert-budget" data-goto="followups"><b>${budgetItems.length}</b><span>Pendientes presupuesto</span></button><button class="alert-card alert-orange" data-goto="followups"><b>${allOpen.length}</b><span>Seguimientos abiertos</span></button><button class="alert-card alert-yellow" data-goto="cash"><b>${cashPend.length}</b><span>Caja chica por comprobar</span></button><button class="alert-card alert-blue" data-goto="perishables"><b>${perishSoon.length}</b><span>Conteos próximos (7 días)</span></button><button class="alert-card alert-neutral" data-goto="followups"><b>${weekTasks.length}</b><span>Actividades esta semana</span></button></div></div>`+`<div class="section-head"><div><h2>Accesos rápidos</h2><p>Elige el módulo que necesitas actualizar.</p></div></div><div class="quick-grid"><button class="quick-link" data-goto="tasks"><span class="quick-icon">✓</span><span><b>Pendientes laborales</b><small>Crear pendientes para una o varias sucursales</small></span></button><button class="quick-link" data-goto="cash"><span class="quick-icon">$</span><span><b>Caja chica</b><small>Tope de $2,000 por sucursal</small></span></button><button class="quick-link" data-goto="taxis"><span class="quick-icon">↗</span><span><b>Importes de taxis</b><small>Seguimiento mensual por sucursal</small></span></button><button class="quick-link" data-goto="perishables"><span class="quick-icon">▦</span><span><b>Inventario perecedero</b><small>Calendario de conteos</small></span></button><button class="quick-link" data-goto="recurring"><span class="quick-icon">↻</span><span><b>Actividades fijas</b><small>Repeticiones mensuales</small></span></button><button class="quick-link" data-goto="followups"><span class="quick-icon">!</span><span><b>Seguimientos pendientes</b><small>Revisar lo que falta concluir</small></span></button></div><div class="section-head"><div><h2>Seguimientos que requieren atención</h2><p>Incluye caja chica atrasada, pendientes y conteos próximos.</p></div><button class="button ghost" data-goto="followups">Ver todos</button></div>${attention.length?`<div class="record-list">${attention.map(x=>recordCard(x,x._type)).join("")}</div>`:`<div class="empty"><b>Todo al día</b>No hay seguimientos que requieran atención.</div>`}`}
- if(currentView==="tasks")v.innerHTML=section("Pendientes laborales","Una actividad puede involucrar varias sucursales.","tasks","Nuevo pendiente")+`<div class="search-row"><input id="searchInput" placeholder="Buscar pendientes..." value="${esc(searchTerm)}"></div>`+list(data.tasks,"tasks");
- if(currentView==="followups"){const pending=openItems().sort(dueSort);v.innerHTML=`${section("Seguimientos pendientes","Lista diaria de registros que todavía no están concluidos.",null,null)}<div class="reminder-banner"><strong>Revisión diaria</strong><p>Estos registros siguen abiertos. La aplicación puede mostrar un aviso mientras esté abierta; para notificaciones fiables con la app cerrada se requiere configurar un servicio externo.</p><button class="button ghost" id="enableNotifications">Activar avisos del navegador</button></div><div class="search-row"><input id="searchInput" placeholder="Buscar por sucursal o pendiente..." value="${esc(searchTerm)}"></div>${pending.length?`<div class="record-list">${pending.map(x=>recordCard(x,x._type)).join("")}</div>`:`<div class="empty"><b>No hay seguimientos pendientes</b>Todos los registros abiertos están al día.</div>`}`}
- if(currentView==="cash")v.innerHTML=section("Caja chica","Límite de $2,000.00 MXN pendientes por sucursal. Los registros con más de 24 horas sin enviar se marcan atrasados.","cash","Registrar entrega")+`<div class="search-row"><input id="searchInput" placeholder="Buscar sucursal o concepto..." value="${esc(searchTerm)}"></div>`+list(data.cash,"cash");
- if(currentView==="taxis"){const month=(document.querySelector("#taxiMonth")||{}).value||today().slice(0,7);const records=data.taxis.filter(x=>x.month===month);const total=records.reduce((s,x)=>s+Number(x.amount||0),0);v.innerHTML=section("Importes mensuales de taxis","Cada sucursal aparece solo después de registrar su importe para un mes.","taxis","Registrar importe")+`<div class="panel month-filter"><label for="taxiMonth">Consultar mes</label><input type="month" id="taxiMonth" value="${esc(month)}"><div><span>Total del mes</span><strong>${money(total)}</strong></div></div><div class="search-row"><input id="searchInput" placeholder="Buscar sucursal..." value="${esc(searchTerm)}"></div>${list(records,"taxis")}`}
- if(currentView==="arqueos"){const records=[...data.arqueos].sort((a,b)=>a.date.localeCompare(b.date));v.innerHTML=section("Arqueos mensuales","Agenda y controla los arqueos por sucursal.","arqueos","Agendar arqueo")+`<div class="panel"><p class="muted">Programa los arqueos del mes, identifica las sucursales involucradas y marca cada arqueo al concluirlo.</p><div class="summary-actions"><button class="button ghost" id="printPending">Generar resumen imprimible / PDF</button></div></div><div class="section-head"><div><h2>Agenda e historial de arqueos</h2></div></div>${list(records,"arqueos")}` }
- if(currentView==="perishables"){const month=(document.querySelector("#calendarMonth")||{}).value||today().slice(0,7);const upcoming=data.perishables.filter(x=>x.status!=="Concluido"&&x.date>=today()).sort((a,b)=>a.date.localeCompare(b.date));v.innerHTML=section("Inventario perecedero","Programa los conteos y consulta las fechas en el calendario.","perishables","Programar conteo")+`<div class="panel"><div class="calendar-toolbar"><h3>Calendario de conteos</h3><label>Mes <input type="month" id="calendarMonth" value="${esc(month)}"></label></div><div id="calendarMount">${monthCalendar()}</div></div><div class="section-head"><div><h2>Próximos conteos</h2><p>Fechas programadas pendientes de realizar.</p></div></div>${upcoming.length?`<div class="record-list">${upcoming.map(x=>recordCard(x,"perishables")).join("")}</div>`:`<div class="empty"><b>No hay conteos próximos</b>Programa un conteo para que aparezca en el calendario.</div>`}`}
- if(currentView==="recurring")v.innerHTML=section("Actividades mensuales fijas","Configura actividades y genera las tareas del mes actual.","recurring","Nueva actividad fija")+`<div class="panel"><h3>Generación mensual</h3><p class="muted">Las instancias anteriores se conservan. Cada actividad puede involucrar varias sucursales.</p><button class="button primary" id="generateMonth">Generar pendientes del mes actual</button></div><div class="section-head"><div><h2>Catálogo de actividades fijas</h2></div></div>`+list(data.recurring,"recurring")+`<div class="section-head"><div><h2>Pendientes generados</h2><p>Historial de cumplimiento por periodo.</p></div></div>`+list(data.generated,"generated");
+"use strict";
+/* Inventario de Medicamentos — PWA estática para GitHub Pages.
+   Datos solo en localStorage de este teléfono/navegador. Sin backend.
+   Hora local: La Paz, BCS (America/Mazatlan, UTC-07:00) es la zona del
+   dispositivo; las fechas se comparan a medianoche local. */
+
+var STORE_KEY = "inventarioMedicamentos.v1";
+var OFF_API = "https://world.openfoodfacts.org/api/v2/product/";
+var EXPIRING_DAYS = 30; // "por vencer" = vence en 30 días o menos
+var LOW_STOCK = 2;      // "stock bajo" = 2 unidades o menos
+
+var store = loadStore();
+var currentFilter = "all";
+var searchTerm = "";
+var scanner = null;
+var scannerRunning = false;
+
+function loadStore() {
+  try {
+    var raw = localStorage.getItem(STORE_KEY);
+    if (!raw) return { medicines: [], links: {} };
+    var parsed = JSON.parse(raw);
+    if (!parsed || !Array.isArray(parsed.medicines)) return { medicines: [], links: {} };
+    if (!parsed.links || typeof parsed.links !== "object") parsed.links = {};
+    return parsed;
+  } catch (e) {
+    return { medicines: [], links: {} };
+  }
 }
-const fields={
-tasks:[["title","Nombre de la actividad","text",true],["branches","Sucursales involucradas","multiselect",true],["due","Fecha límite","date",false],["status","Estado","advanced-status",true],["priority","Prioridad","priority",false],["daily","Marcar como diario","checkbox",false],["notes","Descripción / notas","textarea",false]],
-cash:[["branch","Sucursal","select",true],["deliveredAt","Fecha y hora de entrega","datetime-local",true],["concept","Concepto del gasto","text",true],["amount","Importe (máximo $2,000 pendientes por sucursal)","number",true],["status","Estado","advanced-status",true],["notes","Observaciones","textarea",false]],
-taxis:[["branch","Sucursal","select",true],["month","Mes del importe","month",true],["amount","Importe mensual (MXN)","number",true],["status","Estado","advanced-status",true]],
-recurring:[["title","Nombre de la actividad fija","text",true],["branches","Sucursales involucradas","multiselect",true],["day","Día límite del mes (1–31)","number",true],["notes","Descripción","textarea",false]],
-perishables:[["title","Nombre del conteo / inventario","text",true],["branches","Sucursales involucradas","multiselect",true],["date","Fecha programada","date",true],["notes","Detalle (opcional)","textarea",false]],
-arqueos:[["title","Nombre / tipo de arqueo","text",true],["branches","Sucursales involucradas","multiselect",true],["date","Fecha programada","date",true],["notes","Detalle (opcional)","textarea",false]]
-};
-function openDialog(type){dialogType=type;const dialog=document.querySelector("#itemDialog");document.querySelector("#dialogTitle").textContent=({tasks:"Nuevo pendiente",cash:"Registrar entrega de caja chica",taxis:"Registrar importe mensual de taxis",recurring:"Nueva actividad fija",perishables:"Programar conteo perecedero"})[type];document.querySelector("#formFields").innerHTML=fields[type].map(([name,label,kind,required])=>{let control="";if(kind==="multiselect")control=branchChecks();else if(kind==="advanced-status")control=`<select name="status" required>${ADVANCED_STATUSES.map(st=>`<option ${st==="Registrado"?"selected":""}>${st}</option>`).join("")}</select>`;else if(kind==="select")control=`<select name="${name}" ${required?"required":""}>${branchOptions()}</select>`;else if(kind==="priority")control=`<select name="priority"><option>Normal</option><option>Alta</option><option>Urgente</option></select>`;else if(kind==="checkbox")control=`<label class="daily-toggle"><input type="checkbox" name="${name}"> Repetir este pendiente todos los días</label>`;else if(kind==="textarea")control=`<textarea name="${name}"></textarea>`;else control=`<input name="${name}" type="${kind}" ${required?"required":""} ${name==="amount"?`min="0.01" max="2000" step="0.01"`:""} ${name==="day"?`min="1" max="31"`:""} ${kind==="date"?`value="${today()}"`:""} ${kind==="month"?`value="${today().slice(0,7)}"`:""} ${kind==="datetime-local"?`value="${nowLocal()}"`:""}>`;return `<div class="field ${kind==="textarea"||kind==="multiselect"?"full":""}"><label>${label}${required?" *":""}</label>${control}</div>`}).join("");dialog.showModal()}
-function submitForm(e){e.preventDefault();const fd=new FormData(e.target),x=Object.fromEntries(fd.entries());if(["tasks","recurring","perishables"].includes(dialogType)){x.branches=fd.getAll("branches");if(!x.branches.length){alert("Selecciona al menos una sucursal.");return}}x.id=uid();
- if(dialogType==="tasks"){x.status=x.status||"Registrado";x.priority=x.priority||"Normal";x.daily=x.daily==="on";data.tasks.unshift(x)}
- if(dialogType==="cash"){x.amount=Number(x.amount);if(x.amount>2000){alert("El importe no puede superar $2,000.00 MXN.");return}const current=data.cash.filter(c=>c.branch===x.branch&&c.status==="Pendiente de envío").reduce((s,c)=>s+Number(c.amount||0),0);if(current+x.amount>2000){alert(`La sucursal ya tiene ${money(current)} pendientes. El total pendiente no puede superar $2,000.00 MXN.`);return}x.date=x.deliveredAt.slice(0,10);x.status=x.status||"Pendiente presupuesto";data.cash.unshift(x)}
- if(dialogType==="taxis"){x.amount=Number(x.amount);x.status=x.status||"Registrado";const existing=data.taxis.find(t=>t.branch===x.branch&&t.month===x.month);if(existing){if(!confirm(`Ya existe un importe para ${x.branch} en ${x.month}. ¿Deseas reemplazar ${money(existing.amount)} por ${money(x.amount)}?`))return;existing.amount=x.amount;document.querySelector("#itemDialog").close();save();return}data.taxis.unshift(x)}
- if(dialogType==="recurring"){x.day=Number(x.day);data.recurring.unshift(x)}
- if(dialogType==="perishables"){x.status="Pendiente";data.perishables.unshift(x)}
- if(dialogType==="arqueos"){x.status="Pendiente";data.arqueos.unshift(x)}
- document.querySelector("#itemDialog").close();save()}
-function changeStatus(type,id){const arr=data[type];if(!arr)return;const x=arr.find(a=>a.id===id);if(!x)return;const st=normalizeStatus(x,type);if(type==="cash"){if(st==="Pendiente presupuesto")x.status="Registrado";else if(st==="Registrado")x.status="Pagado";else if(st==="Pagado")x.status="Concluido";else x.status="Pendiente presupuesto";if(x.status==="Registrado")x.sentAt=new Date().toISOString();}else{x.status=st==="Concluido"?"Registrado":"Concluido";if(x.status==="Concluido")x.completedDate=today();if(type==="tasks"&&x.daily&&x.status==="Concluido"){const next=new Date();next.setDate(next.getDate()+1);const due=`${next.getFullYear()}-${String(next.getMonth()+1).padStart(2,"0")}-${String(next.getDate()).padStart(2,"0")}`;data.tasks.unshift({...x,id:uid(),status:"Registrado",due,completedDate:"",createdFromDaily:true})}}save()}
-function setRecordStatus(type,id,status){const arr=data[type];const x=arr&&arr.find(a=>a.id===id);if(!x)return;x.status=status;if(status==="Concluido")x.completedDate=today();if(type==="cash"&&status==="Registrado")x.sentAt=new Date().toISOString();save()}
-function duplicateRecord(type,id){const arr=data[type];const original=arr&&arr.find(x=>x.id===id);if(!original)return;const copy={...original,id:uid(),status:type==="cash"?"Pendiente presupuesto":"Registrado",createdFromDaily:false,completedDate:"",sentAt:""};if(type==="cash"){copy.deliveredAt=nowLocal();copy.date=today();const current=data.cash.filter(c=>c.branch===copy.branch&&! ["Pagado","Concluido"].includes(normalizeStatus(c,"cash"))).reduce((s,c)=>s+Number(c.amount||0),0);if(current+Number(copy.amount||0)>2000){alert(`No se puede duplicar: la sucursal ya tiene ${money(current)} pendientes y el límite es $2,000.00.`);return}}if(type==="taxis"){const existing=data.taxis.find(t=>t.branch===copy.branch&&t.month===copy.month);if(existing){alert("Ya existe un registro de taxis para esa sucursal y mes; cambia el mes o edita el registro existente.");return}}arr.unshift(copy);save()}
-function dailyReminder(){const pending=openItems();if(!pending.length||data.lastReminderDate===today())return;data.lastReminderDate=today();localStorage.setItem(STORE_KEY,JSON.stringify(data));if("Notification" in window&&Notification.permission==="granted"){try{new Notification("Control Administrativo",{body:`Tienes ${pending.length} seguimiento(s) sin concluir.`})}catch{}}}
-document.addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;if(b.dataset.view){currentView=b.dataset.view;searchTerm="";render()}if(b.dataset.goto){currentView=b.dataset.goto;searchTerm="";render()}if(b.dataset.add)openDialog(b.dataset.add);if(b.dataset.duplicate){const [type,id]=b.dataset.duplicate.split(":");duplicateRecord(type,id)}if(b.dataset.status){const [type,id]=b.dataset.status.split(":");changeStatus(type,id)}if(b.dataset.delete){const [type,id]=b.dataset.delete.split(":");if(confirm("¿Eliminar este registro? Esta acción no se puede deshacer.")){data[type]=data[type].filter(x=>x.id!==id);save()}}if(b.id==="addBranchBtn"){const input=document.querySelector("#newBranchInput"),name=(input.value||"").trim();if(!name)return;if(allBranches().some(x=>x.toLowerCase()===name.toLowerCase())){alert("Esa sucursal ya está en el catálogo.");return}const selected=[...document.querySelectorAll("input[name=branches]:checked")].map(c=>c.value);data.customBranches.push(name);localStorage.setItem(STORE_KEY,JSON.stringify(data));document.querySelector(".branch-checks").outerHTML=branchChecks(selected);return}if(b.id==="closeDialog"||b.id==="cancelDialog")document.querySelector("#itemDialog").close();if(b.id==="generateMonth"){const period=today().slice(0,7);let count=0;data.recurring.forEach(r=>{const exists=data.generated.some(g=>g.recurringId===r.id&&g.period===period);if(!exists){const lastDay=new Date(Number(period.slice(0,4)),Number(period.slice(5,7)),0).getDate();data.generated.unshift({id:uid(),recurringId:r.id,title:r.title,branches:r.branches||[r.branch].filter(Boolean),period,due:period+"-"+String(Math.min(r.day,lastDay)).padStart(2,"0"),status:"Pendiente",notes:r.notes||""});count++}});save();alert(count?`Se generaron ${count} actividades para ${period}.`:"Las actividades de este mes ya se habían generado.")}if(b.id==="exportBtn"){const blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"});const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download="control-administrativo-respaldo.json";a.click();URL.revokeObjectURL(a.href)}if(b.id==="printPending"){const pending=openItems();const w=window.open("","_blank");if(!w){alert("Permite las ventanas emergentes para generar el PDF.");return}w.document.write(`<html lang="es"><head><meta charset="utf-8"><title>Resumen de pendientes</title><style>body{font:14px Arial;padding:28px;color:#172b3a}h1{font-size:22px}li{margin:10px 0}small{color:#526779}</style></head><body><h1>Control Administrativo — Resumen de pendientes</h1><p>Generado: ${new Date().toLocaleString("es-MX")}</p><p>Pendientes sin concluir: ${pending.length}</p><ol>${pending.map(x=>`<li><b>${esc(x.title||x.concept||x._label)}</b><br><small>${esc(x._label)} · ${esc(branchText(x))} · ${esc(x.due?dateLabel(x.due):x.date?dateLabel(x.date):"Sin fecha")}</small></li>`).join("")}</ol><script>window.onload=()=>window.print()<\/script></body></html>`);w.document.close()}if(b.id==="enableNotifications"){if(!("Notification" in window)){alert("Este navegador no admite notificaciones.");return}Notification.requestPermission().then(p=>{if(p==="granted"){const n=openItems().length;if(n)new Notification("Control Administrativo",{body:`Tienes ${n} seguimiento(s) sin concluir.`});alert("Avisos del navegador activados. El aviso diario aparecerá cuando abras la aplicación.")}else alert("No se concedió permiso para notificaciones.")})}});
-document.addEventListener("change",e=>{if(e.target.matches("[data-status-select]")){const [type,id]=e.target.dataset.statusSelect.split(":");setRecordStatus(type,id,e.target.value)}});
-document.addEventListener("input",e=>{if(e.target.id==="searchInput"){const pos=e.target.selectionStart;searchTerm=e.target.value;render();const next=document.querySelector("#searchInput");if(next){next.focus();next.setSelectionRange(pos,pos)}}if(e.target.id==="calendarMonth"){const mount=document.querySelector("#calendarMount");if(mount)mount.innerHTML=monthCalendar()}if(e.target.id==="taxiMonth"){const pos=e.target.selectionStart;const month=e.target.value;render();const next=document.querySelector("#taxiMonth");if(next)next.value=month}});
-document.querySelector("#itemForm").addEventListener("submit",submitForm);
-render();dailyReminder();
-if("serviceWorker" in navigator&&location.protocol.startsWith("http"))navigator.serviceWorker.register("./sw.js").catch(()=>{});
+
+function saveStore() {
+  try { localStorage.setItem(STORE_KEY, JSON.stringify(store)); } catch (e) { /* almacenamiento lleno o bloqueado */ }
+}
+
+function uid() {
+  return "med-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
+}
+
+function $(id) { return document.getElementById(id); }
+
+/* ---------- Fechas y caducidad (medianoche local, sin desfase de zona) ---------- */
+function parseLocalDate(iso) {
+  // "2026-12-01" -> fecha a medianoche local (evita el desfase UTC de new Date(iso))
+  var parts = String(iso || "").split("-");
+  if (parts.length !== 3) return null;
+  var d = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+  return isNaN(d.getTime()) ? null : d;
+}
+
+function todayMidnight() {
+  var now = new Date();
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate());
+}
+
+function daysUntil(expiryIso) {
+  var exp = parseLocalDate(expiryIso);
+  if (!exp) return null;
+  var ms = exp.getTime() - todayMidnight().getTime();
+  return Math.round(ms / 86400000);
+}
+
+function expiryStatus(med) {
+  var d = daysUntil(med.expiry);
+  if (d === null) return "ok";
+  if (d < 0) return "expired";
+  if (d <= EXPIRING_DAYS) return "soon";
+  return "ok";
+}
+
+function formatDate(iso) {
+  var d = parseLocalDate(iso);
+  if (!d) return iso || "";
+  return d.toLocaleDateString("es-MX", { day: "numeric", month: "short", year: "numeric" });
+}
+
+function escapeHtml(s) {
+  return String(s == null ? "" : s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
+/* ---------- Resolución del nombre por código de barras ---------- */
+/* 1) registro propio guardado, 2) Open Food Facts (sin clave), 3) pedirlo una vez. */
+async function resolveBarcode(code) {
+  var clean = String(code || "").replace(/\D/g, "");
+  if (!clean) return { code: "", name: "", brand: "", origin: "" };
+
+  var saved = store.links[clean];
+  if (saved && saved.name) {
+    return { code: clean, name: saved.name, brand: saved.brand || "", origin: "Tu registro anterior" };
+  }
+
+  try {
+    var controller = new AbortController();
+    var timer = setTimeout(function () { controller.abort(); }, 8000);
+    var res = await fetch(OFF_API + encodeURIComponent(clean) + ".json?fields=product_name,brands,quantity", { signal: controller.signal });
+    clearTimeout(timer);
+    if (!res.ok) return { code: clean, name: "", brand: "", origin: "" };
+    var data = await res.json();
+    if (data && data.status === 1 && data.product && data.product.product_name) {
+      var brand = data.product.brands || "";
+      var qty = data.product.quantity || "";
+      var presentation = [brand, qty].filter(Boolean).join(" · ");
+      return { code: clean, name: data.product.product_name, brand: presentation, origin: "Base pública" };
+    }
+  } catch (e) {
+    /* Sin internet o la base no respondió: se pide el nombre a mano. */
+  }
+  return { code: clean, name: "", brand: "", origin: "" };
+}
+
+function showNameOrigin(origin) {
+  var el = $("nameOrigin");
+  if (!origin) { el.hidden = true; el.textContent = ""; return; }
+  el.hidden = false;
+  el.textContent = "Origen del nombre: " + origin + ". Puedes corregirlo antes de guardar.";
+}
+
+async function handleBarcode(code) {
+  var clean = String(code || "").replace(/\D/g, "");
+  if (!clean) { toast("Escribe o escanea un código válido."); return; }
+  $("barcodeInput").value = clean;
+  showNameOrigin("");
+  $("nameInput").value = "";
+  $("brandInput").value = "";
+  toast("Buscando nombre del código " + clean + "…");
+  var found = await resolveBarcode(clean);
+  if (found.name) {
+    $("nameInput").value = found.name;
+    if (found.brand) $("brandInput").value = found.brand;
+    showNameOrigin(found.origin);
+    toast("Nombre encontrado: " + found.name);
+  } else {
+    showNameOrigin("Escríbelo");
+    toast("Ese código no está en la base pública. Escribe el nombre una vez y quedará guardado para ese código.");
+    $("nameInput").focus();
+  }
+  closeScanner();
+  $("formSection").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+/* ---------- Escáner (html5-qrcode, CDN) ---------- */
+function openScanner() {
+  $("scannerSection").hidden = false;
+  $("scannerError").hidden = true;
+  $("scannerSection").scrollIntoView({ behavior: "smooth", block: "start" });
+  if (typeof Html5Qrcode === "undefined") {
+    var err = $("scannerError");
+    err.hidden = false;
+    err.textContent = "No se pudo cargar la librería de escaneo (revisa tu conexión). Puedes escribir el código a mano abajo.";
+    return;
+  }
+  if (scannerRunning) return;
+  try {
+    scanner = new Html5Qrcode("reader");
+    scanner.start(
+      { facingMode: "environment" },
+      { fps: 10, qrbox: { width: 250, height: 150 } },
+      function (decodedText) { handleBarcode(decodedText); },
+      function () { /* errores de lectura por cuadro: se ignoran */ }
+    ).then(function () { scannerRunning = true; })
+    .catch(function (e) {
+      var err = $("scannerError");
+      err.hidden = false;
+      err.textContent = "No se pudo abrir la cámara: " + (e && e.message ? e.message : "permiso denegado o cámara no disponible") + ". Puedes escribir el código a mano.";
+    });
+  } catch (e) {
+    var err2 = $("scannerError");
+    err2.hidden = false;
+    err2.textContent = "No se pudo iniciar el escáner. Puedes escribir el código a mano.";
+  }
+}
+
+function closeScanner() {
+  $("scannerSection").hidden = true;
+  if (scanner && scannerRunning) {
+    scanner.stop().then(function () { return scanner.clear(); }).catch(function () {});
+    scannerRunning = false;
+    scanner = null;
+  }
+}
+
+/* ---------- Render ---------- */
+var PASTELS = ["pastel-blue", "pastel-peach", "pastel-lavender", "pastel-mint"];
+
+function pastelFor(id) {
+  var h = 0;
+  for (var i = 0; i < String(id).length; i++) h = (h * 31 + String(id).charCodeAt(i)) % 997;
+  return PASTELS[h % PASTELS.length];
+}
+
+function counts() {
+  var soon = 0, low = 0, expired = 0;
+  store.medicines.forEach(function (m) {
+    var st = expiryStatus(m);
+    if (st === "expired") expired++;
+    else if (st === "soon") soon++;
+    if (Number(m.stock) <= LOW_STOCK) low++;
+  });
+  return { soon: soon, low: low, expired: expired };
+}
+
+function filteredMedicines() {
+  var term = searchTerm.trim().toLowerCase();
+  return store.medicines
+    .filter(function (m) {
+      if (currentFilter === "soon") return expiryStatus(m) === "soon";
+      if (currentFilter === "expired") return expiryStatus(m) === "expired";
+      if (currentFilter === "low") return Number(m.stock) <= LOW_STOCK;
+      return true;
+    })
+    .filter(function (m) {
+      if (!term) return true;
+      return ((m.name || "") + " " + (m.use || "") + " " + (m.brand || "")).toLowerCase().indexOf(term) !== -1;
+    })
+    .slice()
+    .sort(function (a, b) {
+      var da = daysUntil(a.expiry), db = daysUntil(b.expiry);
+      if (da === null) return 1;
+      if (db === null) return -1;
+      return da - db; // lo más próximo a vencer primero
+    });
+}
+
+function render() {
+  var c = counts();
+  $("countSoon").textContent = c.soon;
+  $("countLow").textContent = c.low;
+  $("countExpired").textContent = c.expired;
+
+  var banner = $("alertBanner");
+  if (c.expired > 0) {
+    banner.hidden = false;
+    banner.className = "alert-banner danger";
+    banner.textContent = "Tienes " + c.expired + " medicamento(s) vencido(s). Revísalos y deséchalos según las indicaciones de tu farmacia.";
+  } else if (c.soon > 0) {
+    banner.hidden = false;
+    banner.className = "alert-banner";
+    banner.textContent = c.soon + " medicamento(s) vence(n) en los próximos 30 días.";
+  } else {
+    banner.hidden = true;
+  }
+
+  document.querySelectorAll(".alert-card").forEach(function (card) {
+    card.classList.toggle("active", card.dataset.filter === currentFilter);
+  });
+  document.querySelectorAll(".chip").forEach(function (chip) {
+    chip.classList.toggle("active", chip.dataset.filter === currentFilter);
+  });
+
+  var list = filteredMedicines();
+  $("listCount").textContent = "(" + list.length + " de " + store.medicines.length + ")";
+  $("emptyState").style.display = store.medicines.length === 0 ? "" : "none";
+
+  var ul = $("medicineList");
+  ul.innerHTML = list.map(function (m) {
+    var st = expiryStatus(m);
+    var d = daysUntil(m.expiry);
+    var statusText;
+    if (st === "expired") statusText = '<span class="expired-text">Vencido hace ' + Math.abs(d) + ' día(s) · ' + escapeHtml(formatDate(m.expiry)) + "</span>";
+    else if (st === "soon") statusText = '<span class="soon-text">Vence en ' + d + ' día(s) · ' + escapeHtml(formatDate(m.expiry)) + "</span>";
+    else statusText = "Vence: " + escapeHtml(formatDate(m.expiry)) + " (" + d + " días)";
+
+    var stockClass = Number(m.stock) <= 0 ? "zero" : (Number(m.stock) <= LOW_STOCK ? "low" : "");
+    var initial = (m.name || "?").trim().charAt(0).toUpperCase();
+
+    return '<li class="med-card ' + st + '">' +
+      '<div class="tile ' + pastelFor(m.id) + '">' + escapeHtml(initial) + "</div>" +
+      '<div class="med-body">' +
+        "<h3>" + escapeHtml(m.name) + "</h3>" +
+        '<p class="med-use">' + escapeHtml(m.use || "") + (m.brand ? " · " + escapeHtml(m.brand) : "") + "</p>" +
+        '<p class="med-meta">' + statusText + "</p>" +
+        '<span class="stock-pill ' + stockClass + '">Stock: ' + Number(m.stock) + "</span>" +
+        '<div class="stock-row">' +
+          '<button class="stock-btn" type="button" data-action="minus" data-id="' + m.id + '" aria-label="Quitar una unidad">−</button>' +
+          '<span class="stock-count">' + Number(m.stock) + "</span>" +
+          '<button class="stock-btn" type="button" data-action="plus" data-id="' + m.id + '" aria-label="Agregar una unidad">+</button>' +
+        "</div>" +
+        (m.barcode ? '<p class="barcode">Código: ' + escapeHtml(m.barcode) + "</p>" : "") +
+        '<div class="med-actions">' +
+          '<button class="link-btn" type="button" data-action="edit" data-id="' + m.id + '">Editar</button>' +
+          '<button class="link-btn danger" type="button" data-action="delete" data-id="' + m.id + '">Eliminar</button>' +
+        "</div>" +
+      "</div></li>";
+  }).join("");
+}
+
+/* ---------- Guardar / editar / eliminar ---------- */
+function resetForm() {
+  $("medForm").reset();
+  $("editingId").value = "";
+  $("stockInput").value = "1";
+  $("formTitle").textContent = "Registrar medicamento";
+  $("cancelEditBtn").hidden = true;
+  showNameOrigin("");
+}
+
+function saveMedicine(e) {
+  e.preventDefault();
+  var name = $("nameInput").value.trim();
+  var use = $("useInput").value.trim();
+  var expiry = $("expiryInput").value;
+  var stock = Math.max(0, Math.floor(Number($("stockInput").value) || 0));
+  var barcode = $("barcodeInput").value.replace(/\D/g, "");
+  if (!name || !use || !expiry) { toast("Completa nombre, uso y fecha de caducidad."); return; }
+
+  var id = $("editingId").value;
+  if (id) {
+    var existing = store.medicines.find(function (m) { return m.id === id; });
+    if (!existing) { resetForm(); return; }
+    existing.name = name; existing.brand = $("brandInput").value.trim();
+    existing.use = use; existing.expiry = expiry; existing.stock = stock; existing.barcode = barcode;
+    existing.updatedAt = new Date().toISOString();
+  } else {
+    store.medicines.push({
+      id: uid(), name: name, brand: $("brandInput").value.trim(),
+      use: use, expiry: expiry, stock: stock, barcode: barcode,
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
+    });
+  }
+
+  // Aprender el nombre para ese código: la próxima vez se llena solo.
+  if (barcode && name) {
+    store.links[barcode] = { name: name, brand: $("brandInput").value.trim() };
+  }
+  saveStore();
+  render();
+  resetForm();
+  toast("Medicamento guardado.");
+}
+
+function editMedicine(id) {
+  var m = store.medicines.find(function (x) { return x.id === id; });
+  if (!m) return;
+  closeScanner();
+  $("editingId").value = m.id;
+  $("nameInput").value = m.name || "";
+  $("brandInput").value = m.brand || "";
+  $("useInput").value = m.use || "";
+  $("expiryInput").value = m.expiry || "";
+  $("stockInput").value = String(m.stock);
+  $("barcodeInput").value = m.barcode || "";
+  $("formTitle").textContent = "Editar medicamento";
+  $("cancelEditBtn").hidden = false;
+  if (m.barcode && store.links[m.barcode]) showNameOrigin("Tu registro anterior");
+  else showNameOrigin("");
+  $("formSection").scrollIntoView({ behavior: "smooth", block: "start" });
+  $("nameInput").focus();
+}
+
+function deleteMedicine(id) {
+  var m = store.medicines.find(function (x) { return x.id === id; });
+  if (!m) return;
+  if (!window.confirm("¿Eliminar “" + m.name + "” del inventario?")) return;
+  store.medicines = store.medicines.filter(function (x) { return x.id !== id; });
+  saveStore();
+  render();
+  toast("Medicamento eliminado.");
+}
+
+function changeStock(id, delta) {
+  var m = store.medicines.find(function (x) { return x.id === id; });
+  if (!m) return;
+  m.stock = Math.max(0, Number(m.stock) + delta);
+  m.updatedAt = new Date().toISOString();
+  saveStore();
+  render();
+}
+
+/* ---------- Respaldo exportar / importar ---------- */
+function exportBackup() {
+  var blob = new Blob([JSON.stringify(store, null, 2)], { type: "application/json" });
+  var a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "inventario-medicamentos-respaldo.json";
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+}
+
+function importBackup(file) {
+  if (!file) return;
+  var reader = new FileReader();
+  reader.onload = function () {
+    try {
+      var data = JSON.parse(String(reader.result));
+      if (!data || !Array.isArray(data.medicines)) throw new Error("formato");
+      if (!window.confirm("Esto reemplazará tu inventario actual con el respaldo. ¿Continuar?")) return;
+      store = { medicines: data.medicines, links: (data.links && typeof data.links === "object") ? data.links : {} };
+      saveStore();
+      render();
+      toast("Respaldo importado.");
+    } catch (e) {
+      toast("Ese archivo no es un respaldo válido.");
+    }
+  };
+  reader.readAsText(file);
+}
+
+/* ---------- Avisos ---------- */
+function updateNotifyButton() {
+  var btn = $("notifyBtn");
+  if (!("Notification" in window)) { btn.textContent = "Avisos no disponibles"; btn.disabled = true; return; }
+  btn.textContent = Notification.permission === "granted" ? "Avisos activados" : "Activar avisos";
+}
+
+async function requestNotifications() {
+  if (!("Notification" in window)) { toast("Este navegador no soporta avisos."); return; }
+  var perm = await Notification.requestPermission();
+  updateNotifyButton();
+  if (perm === "granted") { toast("Avisos activados. Aparecerán al abrir la app."); checkExpiries(true); }
+  else toast("Los avisos quedaron desactivados.");
+}
+
+function checkExpiries(notify) {
+  var c = counts();
+  if (notify && "Notification" in window && Notification.permission === "granted" && (c.soon > 0 || c.expired > 0)) {
+    try {
+      new Notification("Inventario de Medicamentos", {
+        body: (c.expired > 0 ? c.expired + " vencido(s). " : "") + (c.soon > 0 ? c.soon + " por vencer en 30 días o menos." : ""),
+        icon: "./icon-512.png"
+      });
+    } catch (e) { /* notificaciones bloqueadas por el navegador */ }
+  }
+  return c;
+}
+
+/* ---------- Utilidades ---------- */
+var toastTimer = null;
+function toast(msg) {
+  var t = $("toast");
+  t.textContent = msg;
+  t.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(function () { t.hidden = true; }, 3500);
+}
+
+function setFilter(f) {
+  currentFilter = f;
+  render();
+}
+
+/* ---------- Inicio ---------- */
+document.addEventListener("DOMContentLoaded", function () {
+  render();
+  updateNotifyButton();
+  checkExpiries(true);
+
+  $("scanBtn").addEventListener("click", openScanner);
+  $("closeScannerBtn").addEventListener("click", closeScanner);
+  $("manualBtn").addEventListener("click", function () { handleBarcode($("manualCode").value); });
+  $("manualCode").addEventListener("keydown", function (e) { if (e.key === "Enter") { e.preventDefault(); handleBarcode(e.target.value); } });
+  $("barcodeInput").addEventListener("change", function () {
+    var code = $("barcodeInput").value.replace(/\D/g, "");
+    if (code && !$("nameInput").value.trim()) handleBarcode(code);
+  });
+
+  $("medForm").addEventListener("submit", saveMedicine);
+  $("cancelEditBtn").addEventListener("click", resetForm);
+  $("searchInput").addEventListener("input", function (e) { searchTerm = e.target.value; render(); });
+
+  document.querySelectorAll("[data-filter]").forEach(function (el) {
+    el.addEventListener("click", function () { setFilter(el.dataset.filter); });
+  });
+
+  $("medicineList").addEventListener("click", function (e) {
+    var btn = e.target.closest("button[data-action]");
+    if (!btn) return;
+    var action = btn.dataset.action, id = btn.dataset.id;
+    if (action === "plus") changeStock(id, 1);
+    else if (action === "minus") changeStock(id, -1);
+    else if (action === "edit") editMedicine(id);
+    else if (action === "delete") deleteMedicine(id);
+  });
+
+  $("exportBtn").addEventListener("click", exportBackup);
+  $("importBtn").addEventListener("click", function () { $("importFile").click(); });
+  $("importFile").addEventListener("change", function (e) { importBackup(e.target.files[0]); e.target.value = ""; });
+  $("notifyBtn").addEventListener("click", requestNotifications);
+
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", function () {
+      navigator.serviceWorker.register("./sw.js").catch(function () {});
+    });
+  }
+});
