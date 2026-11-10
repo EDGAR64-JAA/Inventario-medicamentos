@@ -1,1 +1,14 @@
-{"background_color":"#f4f7f8","description":"Inventario de medicamentos en casa: escanea el código de barras, guarda nombre, uso, caducidad y stock, y recibe alertas antes de que caduquen.","display":"standalone","icons":[{"purpose":"any","sizes":"512x512","src":"./icon-512.png","type":"image/png"},{"purpose":"maskable","sizes":"512x512","src":"./icon-512.png","type":"image/png"},{"purpose":"any","sizes":"any","src":"./icon.svg","type":"image/svg+xml"}],"lang":"es-MX","name":"Inventario de Medicamentos","orientation":"portrait","scope":"./","short_name":"Medicamentos","start_url":"./index.html","theme_color":"#0e6390"}
+{
+  "name": "Control Administrativo",
+  "short_name": "Control Admin",
+  "description": "Seguimiento laboral, caja chica, importes de taxis, inventario perecedero y actividades fijas.",
+  "lang": "es-MX",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f4f7fb",
+  "theme_color": "#16324f",
+  "icons": [
+    {"src":"icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}
+  ]
+}
